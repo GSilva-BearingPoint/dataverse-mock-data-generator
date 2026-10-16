@@ -31,3 +31,12 @@ See `repository-process-context.md`. This question is mandatory, but providing a
 Run `scripts/summarize_testdata_workbook.py` after validation. Show its short summary immediately before the
 approval prompt: target environment, record counts per table, relationships, email-alias behavior, workbook
 path, and the explicit statement that no records have been written yet.
+
+The summary must also show:
+
+- Which tables were explicitly requested and which were added automatically.
+- The exact source table and lookup that caused each implicit dependency.
+- Whether each relationship uses records generated in this run or explicitly selected existing records.
+- Per-table meaningful-field completeness statistics.
+- Three complete sample rows per table, including lookup keys and email aliases.
+- Discovery warnings and skipped optional relationships.

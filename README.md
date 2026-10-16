@@ -1,4 +1,4 @@
-# Dataverse Test Data Generator
+# Dataverse Mock Data Generator
 
 An agentic **GitHub Copilot CLI skill** (`SKILL.md`) that generates realistic, schema-aware test/demo data
 for Microsoft Dataverse / Power Apps tables, previews it as an editable Excel workbook, and only writes to
@@ -89,10 +89,14 @@ The local Python scripts in this repo only do what the Microsoft skills don't:
   generated email reuses one address the user actually controls with a unique `+id` suffix, so Outlook/Gmail
   deliver all test mail to the user's own inbox — never to a stranger's real address.
 - **Schema discovered live, every run.** Static/sample plans are never used for a real request; the target
-  environment is treated as the single source of truth since schemas evolve.
+  environment is treated as the source of metadata since schemas evolve. The generator itself remains
+  environment-independent: it contains no assumptions about the current organization's tables or records.
 - **Dependency-ordered, FK-aware generation.** Tables are topologically sorted on ManyToOne relationships so
-  parents are always generated/committed before children; required lookups pointing outside the requested
-  table set are surfaced to the user rather than silently fabricated or skipped.
+  parents are always generated/committed before children; single-target required lookups automatically add
+  fully filled parent tables, and the exact reason is shown to the user.
+- **Meaningful-data contract per table.** Writable required fields and primary names are combined with a
+  representative metadata-derived profile. The same contract is stored in the workbook and rejects edited
+  rows that become technically valid but too sparse to be useful.
 - **Defensive discovery of undocumented business rules.** Plugins/business rules can reject writes for
   reasons invisible in metadata. After approval, a single probe record is created per table first; a 400/409
   error is parsed to patch the generator and the full batch is created only after that succeeds.
@@ -142,6 +146,7 @@ scripts/
   validate_testdata_workbook.py                 Validates an edited workbook against its hidden metadata contract
   summarize_testdata_workbook.py                Prints the concise pre-approval summary (counts, relationships, env)
   apply_testdata_workbook.py                    Commits approved rows to Dataverse in dependency order; writes manifest
+  quality_profile.py                            Shared per-table meaningful-data contract and completeness evaluation
   seed_name_loader.py                           Loads realistic first/middle/last name pools from references/seed-names
   testdata_common.py                            Shared helpers: email aliasing, dependency ordering, size->count map
   requirements.txt                              Python dependencies
@@ -179,6 +184,8 @@ examples/
      |
  6  discover_testdata_workbook.py          (live dv-metadata: required cols, option sets, alt keys, FK graph)
      |-- dependency-sorts tables (parents first)
+     |-- recursively adds required related tables and records why
+     |-- derives a meaningful-data quality profile independently for every table
      |-- generates ALL records in memory (no writes), applying:
      |     - real option-set values (never placeholder ints)
      |     - seed-email +alias for every email column
@@ -188,7 +195,7 @@ examples/
      |-- renders the Excel workbook (one sheet per table + hidden _Metadata)
      |
  7  validate_testdata_workbook.py          (re-run after any user edit to the workbook)
- 8  summarize_testdata_workbook.py         (counts, dependency order, relationships, sample rows)
+ 8  summarize_testdata_workbook.py         (counts, dependency reasons, completeness, relationships, samples)
      |
  9  ---- HARD APPROVAL GATE: agent must stop and wait for explicit "yes" ----
      |
@@ -223,6 +230,8 @@ confirmation, repository-context question, workbook path, or final approval).
   — so relationships are understandable without GUIDs, which don't exist yet.
 - Required columns and lookup columns are each given a distinct highlight color; option-set columns get
   native Excel data-validation dropdowns where the list fits Excel's inline-list limit.
+- The hidden contract records why every table/column was included and the minimum meaningful profile each
+  row must continue to satisfy.
 - Users may edit values, add rows, or delete rows before approving. Any edit must be re-validated with
   `validate_testdata_workbook.py` before the approval question is asked again.
 

@@ -1,9 +1,9 @@
 ---
-name: dv-test-data-generator
-description: Generate small/medium/large volumes of realistic test data for Dataverse/Power Apps tables that respects existing schema, required fields, picklist values, relationships (FK dependency order), and business rules. Uses a reusable seed email with +alias uniqueness for any email column. Always previews a dry run and requires explicit user approval before committing writes. Use when the user asks to generate, seed, populate, or create test/sample/demo data for one or more Dataverse tables.
+name: dv-mock-data-generator
+description: Generate small/medium/large volumes of realistic mock data for Dataverse/Power Apps tables that respects existing schema, required fields, picklist values, relationships (FK dependency order), and business rules. Uses a reusable seed email with +alias uniqueness for any email column. Always previews a dry run and requires explicit user approval before committing writes. Use when the user asks to generate, seed, populate, or create mock/test/sample/demo data for one or more Dataverse tables.
 ---
 
-# Skill: Dataverse Test Data Generator
+# Skill: Dataverse Mock Data Generator
 
 This is an orchestration skill for the official Microsoft
 [`microsoft/Dataverse-skills`](https://github.com/microsoft/Dataverse-skills) package. It must use:
@@ -116,11 +116,15 @@ Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the
    [`references/schema-and-dependency-discovery.md`](references/schema-and-dependency-discovery.md):
    required columns, attribute types, valid Picklist option values, alternate keys, and ManyToOne lookup
    relationships to other tables (both other requested tables and tables outside the request). Never use a
-   static/sample plan as the user's approval workbook. The environment is the source of truth on every run.
+   static/sample plan as the user's approval workbook. The environment is the source of metadata on every
+   run, but generation logic must not contain environment-specific table, column, value, or record
+   assumptions.
 8. **Resolve relationship order.** Topologically sort requested tables by FK dependency (parents before
-   children). If a required/likely-required lookup points to a table **not** in the request, surface it:
-   "`contact` requires `parentcustomerid` -> `account`. Include `account` in this run, or point existing
-   records?" — do not guess silently.
+   children). A single-target required lookup to a table not explicitly requested is added recursively as a
+   fully generated implicit dependency. Record the source table, lookup, and dependency path and show them
+   in the workbook and final summary. Required polymorphic lookups still require an explicit target. Optional
+   lookups are filled when their target table was explicitly selected or a user-confirmed repository rule
+   selects a target present in live relationship metadata.
 9. **Generate records in memory only** (no writes yet) using the schema-driven `fake()` dispatch pattern
    from dv-data's sample-data-generation reference, extended with:
    - Picklist/Status columns get a value randomly chosen from the **actual** valid OptionSet values (never
@@ -133,10 +137,14 @@ Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the
      middle names when the table exposes a middle-name column.
    - Lookup columns for parent tables already generated in this run are bound via `@odata.bind` to the
      newly-generated parent GUIDs once parents are committed (see step 6) — never fabricated GUIDs.
-   - Respect uniqueness: if a column has an alternate key or the table rejects a duplicate on a dry
-     single-record probe, append the record index to keep values unique.
+   - Respect uniqueness: keep alternate-key attribute groups intact. Enforce single-column keys directly and
+     composite keys by tuple, adjusting a writable string component when needed.
    - Apply user-confirmed repository defaults, allowed values, templates, and safe calculations before the
      workbook is rendered.
+   - Build and satisfy a metadata-driven quality profile for each table: all writable required fields and
+     the primary name, plus representative semantic groups such as contactability, address, descriptive,
+     product, transaction, organization, or relationship data. Do not select every unknown custom column by
+     default; choose a small representative fallback unless `--all-writable-columns` was explicitly used.
 10. **Create the Excel preview** as part of `scripts/discover_testdata_workbook.py`. The workbook is the canonical
    suggested-data plan and must be returned to the user before approval. See
    [`references/excel-preview-format.md`](references/excel-preview-format.md):
@@ -148,6 +156,8 @@ Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the
      validation where the valid option list fits Excel's inline-list limit.
    - A hidden `_Metadata` sheet carries table/entity-set/navigation-property metadata used by the validator
      and approved apply script.
+   - The metadata also carries column-selection reasons, table inclusion provenance, warnings, and the
+     meaningful-data quality profile.
 11. **Dry-run preview — always shown, never skipped.** Run
     `scripts/summarize_testdata_workbook.py` and place its concise output immediately before the approval
     question:
@@ -160,6 +170,8 @@ Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the
      run `scripts/validate_testdata_workbook.py` and show any errors before asking again.
    - Total record count across all tables and an explicit list of any lookups that will be bound to
      parent records created in the same run.
+   - Requested versus implicitly added tables, the reason for every implicit dependency, per-table
+     completeness statistics, warnings, and whether relationships use generated or existing records.
    - End with a direct approval question, e.g.: *"Create these 275 records (25 accounts, 250 contacts)
      in `contoso-dev`? (yes / no / adjust)"*
 12. **Hard stop for approval.** Do **not** call any create/upsert operation until the user replies with an
@@ -192,6 +204,10 @@ Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the
   see the aliasing reference for the exact transform.
 - Skip `createdon`, `modifiedon`, `ownerid`, `statecode`, `statuscode` and any Lookup the user hasn't
   resolved, same as dv-data's sample-data-generation safety rules.
+- Never tailor generation logic to the currently connected environment. Only live metadata, confirmed
+  declarative business rules/repository context, and table relationships may influence profiles and values.
+- Never accept a technically valid but bare-bones workbook row. Revalidate the stored quality profile,
+  option values, alternate-key uniqueness, lengths, and numeric bounds before approval and apply.
 - If a `describe`/create probe reveals a plugin-enforced business rule (400 error naming a field or
   constraint not visible in metadata), add it to the preview as a discovered rule and regenerate before
   asking for approval again — don't silently retry past business-rule failures.

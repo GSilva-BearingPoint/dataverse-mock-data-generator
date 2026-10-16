@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+import realistic_data
 from seed_name_loader import load_seed_names
 
 
@@ -23,18 +24,6 @@ _SEED_NAMES = load_seed_names()
 FIRST_NAMES = _SEED_NAMES["first"]
 MIDDLE_NAMES = _SEED_NAMES["middle"]
 LAST_NAMES = _SEED_NAMES["last"]
-FRIENDLY_ADJECTIVES = (
-    "Bright", "Cedar", "Clear", "Evergreen", "Golden", "Harbor", "North", "Oak", "River", "Summit",
-)
-FRIENDLY_NOUNS = (
-    "Advisory", "Analytics", "Collective", "Consulting", "Digital", "Group", "Partners", "Studio", "Systems", "Works",
-)
-JOB_TITLES = (
-    "Account Manager", "Business Analyst", "Customer Success Manager", "Data Specialist",
-    "Delivery Lead", "Operations Manager", "Project Coordinator", "Sales Consultant",
-    "Service Manager", "Solution Architect",
-)
-
 
 def load_json(path: str | Path) -> dict[str, Any]:
     with Path(path).open(encoding="utf-8") as handle:
@@ -127,36 +116,28 @@ def human_friendly_string(
     column: dict[str, Any],
     table_name: str,
     index: int,
+    current_run_id: str = "",
 ) -> str:
     name = column["logical_name"].casefold()
     if name in {"firstname", "first_name", "givenname", "given_name"}:
-        return FIRST_NAMES[index % len(FIRST_NAMES)]
+        return realistic_data.pick(FIRST_NAMES, index, current_run_id, "first")
     if name in {"middlename", "middle_name", "additionalname", "additional_name"}:
-        return MIDDLE_NAMES[(index * 17) % len(MIDDLE_NAMES)]
+        return realistic_data.pick(MIDDLE_NAMES, index, current_run_id, "middle")
     if name in {"lastname", "last_name", "surname", "familyname", "family_name"}:
-        return LAST_NAMES[(index * 37) % len(LAST_NAMES)]
-    if "jobtitle" in name or name in {"title", "position"}:
-        return JOB_TITLES[index % len(JOB_TITLES)]
-    if "city" in name:
-        return ("Lisbon", "Porto", "Madrid", "Paris", "Berlin", "London")[index % 6]
-    if any(token in name for token in ("street", "addressline")):
-        return f"{100 + index} Market Street"
-    if "postal" in name or "zipcode" in name:
-        return f"{1000 + (index % 9000):04d}-001"
-
-    adjective = FRIENDLY_ADJECTIVES[index % len(FRIENDLY_ADJECTIVES)]
-    noun = FRIENDLY_NOUNS[(index // len(FRIENDLY_ADJECTIVES)) % len(FRIENDLY_NOUNS)]
+        return realistic_data.pick(LAST_NAMES, index, current_run_id, "last")
+    if name in {"title", "position"}:
+        return realistic_data.generate("job_title", column, table_name, index, current_run_id)
+    org = realistic_data.org_name(index, current_run_id)
     if (
-        name == "name"
+        name in {"name", "accountname", "companyname"}
         or name.endswith("name")
         or any(token in name for token in ("company", "account", "organization", "project"))
     ):
-        return f"{adjective} {noun} {index + 1}"
+        return org
     if "description" in name or "notes" in name or "comment" in name:
-        return f"{adjective} {noun} engagement prepared for demonstration and testing."
+        return f"{org} record prepared for demonstration and testing."
     label = column.get("label") or column["logical_name"]
-    return f"{adjective} {label} {index + 1}"
-
+    return f"{org} {label}"
 
 def apply_context_rules(
     record: dict[str, Any],
@@ -287,6 +268,13 @@ def generate_value(
             name,
         )
         return alias_email(seed_email, identifier)
+    role = column.get("role") or realistic_data.classify(name, attr_type, column.get("format"))
+    if role:
+        organic = realistic_data.generate(role, column, table_name, index, current_run_id)
+        if organic is not None:
+            return _truncate(organic, column) if isinstance(organic, str) else organic
+        if role == "addr_line2":
+            return None
     if attr_type in {"Picklist", "Status"}:
         return _choice_value(column, index)
     if attr_type == "Boolean":
@@ -299,15 +287,17 @@ def generate_value(
         minimum = float(column.get("min_value", 1))
         maximum = float(column.get("max_value", max(minimum, 10000)))
         return round(random.Random(f"{current_run_id}:{table_name}:{name}:{index}").uniform(minimum, maximum), 2)
+    if attr_type == "DateTime" and column.get("format") == "DateOnly":
+        return (dt.date.today() - dt.timedelta(days=index)).isoformat()
     if attr_type == "DateTime":
         value = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=index)
         return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if attr_type in {"String", "Memo"}:
         if any(token in lowered for token in ("phone", "telephone", "fax")):
-            return f"555-01{index % 100:02d}"
-        if "url" in lowered or "website" in lowered:
-            return f"https://example.com/{table_name}/{index + 1}"
-        value = human_friendly_string(column, table_name, index)
+            return _truncate(
+                realistic_data.generate("phone", column, table_name, index, current_run_id), column
+            )
+        value = human_friendly_string(column, table_name, index, current_run_id)
         if column.get("unique") and not value.endswith(str(index + 1)):
             value = f"{value} {index + 1}"
         return _truncate(value, column)
@@ -331,4 +321,55 @@ def generate_records(
                 record[column["logical_name"]] = value
         apply_context_rules(record, table.get("context_rules") or {}, index)
         records.append(record)
+    alternate_keys = table.get("alternate_keys") or [
+        [column["logical_name"]]
+        for column in table.get("columns", [])
+        if column.get("unique")
+    ]
+    columns_by_name = {
+        column["logical_name"]: column for column in table.get("columns", [])
+    }
+    for key_columns in alternate_keys:
+        seen: set[tuple[str, ...]] = set()
+        for index, record in enumerate(records):
+            if not all(
+                record.get(column_name) is not None and record.get(column_name) != ""
+                for column_name in key_columns
+            ):
+                continue
+            key = tuple(str(record[column_name]) for column_name in key_columns)
+            if key in seen:
+                adjustable = next(
+                    (
+                        columns_by_name[column_name]
+                        for column_name in reversed(key_columns)
+                        if columns_by_name.get(column_name, {}).get("type") in {"String", "Memo"}
+                    ),
+                    None,
+                )
+                if adjustable is None:
+                    raise ValueError(
+                        f"{table['logical_name']}: generated duplicate alternate key "
+                        f"({', '.join(key_columns)}) and no string component can be adjusted."
+                    )
+                column_name = adjustable["logical_name"]
+                suffix = f"-{index + 1}"
+                max_length = adjustable.get("max_length")
+                base = str(record[column_name])
+                if max_length is not None:
+                    available = int(max_length) - len(suffix)
+                    if available < 1:
+                        raise ValueError(
+                            f"{table['logical_name']}.{column_name} is too short to make "
+                            "the generated alternate key unique."
+                        )
+                    base = base[:available]
+                record[column_name] = base + suffix
+                key = tuple(str(record[name]) for name in key_columns)
+                if key in seen:
+                    raise ValueError(
+                        f"{table['logical_name']}: could not make alternate key "
+                        f"({', '.join(key_columns)}) unique."
+                    )
+            seen.add(key)
     return records

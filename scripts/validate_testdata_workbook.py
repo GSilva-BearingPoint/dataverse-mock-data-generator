@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
 
+from quality_profile import evaluate_record
 from testdata_common import INTERNAL_KEY
 
 
@@ -65,6 +67,96 @@ def validate(path: Path) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
             for column in required:
                 if row.get(column) is None or row.get(column) == "":
                     errors.append(f"{name}!{row_number}: required column {column} is blank.")
+            for column in table.get("columns", []):
+                column_name = column["logical_name"]
+                value = row.get(column_name)
+                if value is None or value == "":
+                    continue
+                max_length = column.get("max_length")
+                if max_length is not None and len(str(value)) > int(max_length):
+                    errors.append(
+                        f"{name}!{row_number}: {column_name} exceeds maximum length {max_length}."
+                    )
+                options = column.get("options") or []
+                if options:
+                    allowed = {
+                        str(option["value"] if isinstance(option, dict) else option)
+                        for option in options
+                    }
+                    if str(value) not in allowed:
+                        errors.append(
+                            f"{name}!{row_number}: {column_name} has invalid choice value {value!r}."
+                        )
+                if column.get("type") in {
+                    "BigInt",
+                    "Decimal",
+                    "Double",
+                    "Integer",
+                    "Money",
+                }:
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        errors.append(
+                            f"{name}!{row_number}: {column_name} must be numeric."
+                        )
+                    elif column.get("type") in {"BigInt", "Integer"} and not isinstance(value, int):
+                        errors.append(
+                            f"{name}!{row_number}: {column_name} must be an integer."
+                        )
+                    else:
+                        minimum = column.get("min_value")
+                        maximum = column.get("max_value")
+                        if minimum is not None and value < minimum:
+                            errors.append(
+                                f"{name}!{row_number}: {column_name} is below minimum {minimum}."
+                            )
+                        if maximum is not None and value > maximum:
+                            errors.append(
+                                f"{name}!{row_number}: {column_name} exceeds maximum {maximum}."
+                            )
+                if column.get("type") == "Boolean" and not isinstance(value, bool):
+                    errors.append(
+                        f"{name}!{row_number}: {column_name} must be a Boolean value."
+                    )
+                if column.get("type") == "DateTime":
+                    valid_date = isinstance(value, (dt.date, dt.datetime))
+                    if isinstance(value, str):
+                        try:
+                            if column.get("format") == "DateOnly":
+                                dt.date.fromisoformat(value)
+                            else:
+                                dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+                            valid_date = True
+                        except ValueError:
+                            valid_date = False
+                    if not valid_date:
+                        errors.append(
+                            f"{name}!{row_number}: {column_name} must be a valid "
+                            + ("date." if column.get("format") == "DateOnly" else "date/time.")
+                        )
+            for quality_error in evaluate_record(table, row):
+                errors.append(
+                    f"{name}!{row_number}: record is not meaningful enough: {quality_error}."
+                )
+        alternate_keys = table.get("alternate_keys") or [
+            [column["logical_name"]]
+            for column in table.get("columns", [])
+            if column.get("unique")
+        ]
+        for key_columns in alternate_keys:
+            values = [
+                tuple(str(row[column_name]) for column_name in key_columns)
+                for row in rows
+                if all(
+                    row.get(column_name) is not None and row.get(column_name) != ""
+                    for column_name in key_columns
+                )
+            ]
+            duplicates = sorted({value for value in values if values.count(value) > 1})
+            if duplicates:
+                errors.append(
+                    f"{name}: alternate key ({', '.join(key_columns)}) has duplicate values: "
+                    f"{duplicates}."
+                )
 
     for name, rows in rows_by_table.items():
         table = tables[name]
@@ -78,7 +170,7 @@ def validate(path: Path) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
                             f"{name}!{row_number}: required lookup {lookup['column']} is blank."
                         )
                     continue
-                if str(value) not in target_keys:
+                if str(value) not in target_keys and str(value) not in (lookup.get("existing_ids") or []):
                     errors.append(
                         f"{name}!{row_number}: lookup {lookup['column']} points to "
                         f"unknown {lookup['target_table']} key {value!r}."

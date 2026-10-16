@@ -83,6 +83,10 @@ def main() -> None:
     )
     parser.add_argument("--chunk-size", type=int, default=500)
     parser.add_argument("--manifest-dir", default="testdata-manifests")
+    parser.add_argument(
+        "--resume-manifest",
+        help="Manifest of an interrupted run; tables already in it are reused, not recreated.",
+    )
     args = parser.parse_args()
 
     os.environ["DATAVERSE_URL"] = args.environment_url.rstrip("/")
@@ -127,7 +131,24 @@ def main() -> None:
         f"{run.get('name', 'testdata')}-{run['order'][0]}-{run.get('run_id', 'run')}.json"
     )
 
+    resumed: dict[str, list[dict[str, str]]] = {}
+    if args.resume_manifest:
+        with Path(args.resume_manifest).open(encoding="utf-8") as handle:
+            previous = json.load(handle)
+        if str(previous.get("workbook")) != str(workbook_path.resolve()):
+            raise RuntimeError("Resume manifest belongs to a different workbook. No records were created.")
+        resumed = {
+            name: items
+            for name, items in previous["records"].items()
+            if len(items) == len(rows_by_table.get(name, []))
+        }
+
     for table_name in run["order"]:
+        if table_name in resumed:
+            id_by_key[table_name] = {item["row_key"]: item["id"] for item in resumed[table_name]}
+            manifest["records"][table_name] = resumed[table_name]
+            print(f"{table_name}: reusing {len(resumed[table_name])} records from resume manifest")
+            continue
         table = tables[table_name]
         payloads: list[dict[str, Any]] = []
         keys: list[str] = []
@@ -144,8 +165,15 @@ def main() -> None:
                 target_key = row.get(column_name)
                 if not target_key:
                     continue
-                target_guid = id_by_key[lookup["target_table"]][str(target_key)]
-                target_entity_set = tables[lookup["target_table"]]["entity_set_name"]
+                if str(target_key) in (lookup.get("existing_ids") or []):
+                    target_guid = str(target_key)
+                else:
+                    target_guid = id_by_key[lookup["target_table"]][str(target_key)]
+                if lookup["target_table"] in tables:
+                    target_entity_set = tables[lookup["target_table"]]["entity_set_name"]
+                else:
+                    info = client.tables.get(lookup["target_table"])
+                    target_entity_set = info.get("EntitySetName") or info.get("entity_set_name")
                 payload[f"{lookup['navigation_property']}@odata.bind"] = (
                     f"/{target_entity_set}({target_guid})"
                 )

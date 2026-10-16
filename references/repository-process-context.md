@@ -44,7 +44,12 @@ Never execute expressions copied from the repository. Translate confirmed behavi
           "operation": "multiply",
           "sources": ["new_monthlyvalue", "new_contractmonths"]
         }
-      ]
+      ],
+      "relationships": {
+        "new_customerid": {
+          "target_table": "account"
+        }
+      }
     }
   }
 }
@@ -52,6 +57,10 @@ Never execute expressions copied from the repository. Translate confirmed behavi
 
 Supported calculations are `add`, `subtract`, `multiply`, `divide`, and `concat`. Referenced fields must be
 writable structural columns in the live environment. Missing/non-writable columns stop generation.
+
+`relationships` may select a single target for an optional or polymorphic lookup. The selected target must
+match the live relationship metadata. A selected target that is not otherwise requested is added as an
+implicit generated dependency and reported to the user with its reason.
 
 Pass the confirmed file with `--context-rules`. The workbook README and approval summary identify the
 repository source; if the user declines repository context, they explicitly show `none provided`.

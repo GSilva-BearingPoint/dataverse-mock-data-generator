@@ -11,6 +11,8 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from derive_values import derive_values
+from quality_profile import evaluate_record
 from testdata_common import (
     INTERNAL_KEY,
     dependency_order,
@@ -44,6 +46,20 @@ def _table_records(
     return records
 
 
+def _inclusion_reason(table: dict[str, Any]) -> str:
+    inclusion = table.get("inclusion") or {}
+    reasons = inclusion.get("reasons") or []
+    if not reasons:
+        return "Explicitly requested"
+    reason_text = "; ".join(
+        f"{reason['source_table']}.{reason['lookup_column']} "
+        f"({reason['requirement']})"
+        for reason in reasons
+    )
+    path = inclusion.get("dependency_path") or []
+    return reason_text + (f"; path: {' -> '.join(path)}" if path else "")
+
+
 def build_workbook(spec: dict[str, Any], output_path: Path) -> None:
     tables = spec["tables"]
     current_run_id = run_id(spec)
@@ -53,6 +69,32 @@ def build_workbook(spec: dict[str, Any], output_path: Path) -> None:
     records_by_table = {
         name: _table_records(by_name[name], seed_email, current_run_id) for name in order
     }
+    for name in order:
+        for lookup in by_name[name].get("lookups", []):
+            target_records = records_by_table.get(lookup["target_table"])
+            pool = lookup.get("existing_ids")
+            if not pool and not target_records:
+                if lookup.get("required"):
+                    raise ValueError(
+                        f"Required lookup {name}.{lookup['column']} targets {lookup['target_table']}, "
+                        "which has no generated records."
+                    )
+                continue
+            for index, record in enumerate(records_by_table[name]):
+                record[lookup["column"]] = (
+                    pool[index % len(pool)] if pool
+                    else target_records[index % len(target_records)][INTERNAL_KEY]
+                )
+    derive_values(by_name, records_by_table, order)
+    for name in order:
+        table = by_name[name]
+        for index, record in enumerate(records_by_table[name], start=1):
+            quality_errors = evaluate_record(table, record)
+            if quality_errors:
+                raise ValueError(
+                    f"{name} generated row {index} does not satisfy its quality profile: "
+                    + "; ".join(quality_errors)
+                )
 
     workbook = Workbook()
     summary = workbook.active
@@ -64,7 +106,9 @@ def build_workbook(spec: dict[str, Any], output_path: Path) -> None:
     summary.append(["Repository context", spec.get("context_source") or "(none provided)"])
     summary.append(["Approval status", "NOT APPROVED - workbook is a preview only"])
     summary.append([])
-    summary.append(["Creation order", "Table", "Suggested records", "Worksheet"])
+    summary.append(
+        ["Creation order", "Table", "Suggested records", "Worksheet", "Source", "Reason"]
+    )
 
     used_sheet_names = {"readme", "_metadata"}
     sheet_by_table = {
@@ -72,7 +116,28 @@ def build_workbook(spec: dict[str, Any], output_path: Path) -> None:
         for name in order
     }
     for level, name in enumerate(order, start=1):
-        summary.append([level, name, len(records_by_table[name]), sheet_by_table[name]])
+        table = by_name[name]
+        inclusion = table.get("inclusion") or {}
+        summary.append(
+            [
+                level,
+                name,
+                len(records_by_table[name]),
+                sheet_by_table[name],
+                inclusion.get("kind", "requested"),
+                _inclusion_reason(table),
+            ]
+        )
+    implicit_tables = [
+        by_name[name]
+        for name in order
+        if (by_name[name].get("inclusion") or {}).get("kind") == "implicit"
+    ]
+    if implicit_tables:
+        summary.append([])
+        summary.append(["Automatically added tables"])
+        for table in implicit_tables:
+            summary.append([table["logical_name"], _inclusion_reason(table)])
     warnings = spec.get("warnings") or []
     if warnings:
         summary.append([])
@@ -93,6 +158,7 @@ def build_workbook(spec: dict[str, Any], output_path: Path) -> None:
         "seed_email": seed_email,
         "context_source": spec.get("context_source"),
         "context_notes": spec.get("context_notes") or [],
+        "warnings": warnings,
         "order": order,
         "sheet_by_table": sheet_by_table,
     })
@@ -131,20 +197,13 @@ def build_workbook(spec: dict[str, Any], output_path: Path) -> None:
 
         for lookup in table.get("lookups", []):
             target_name = lookup["target_table"]
-            target_records = records_by_table.get(target_name)
-            if not target_records:
-                if lookup.get("required"):
-                    raise ValueError(
-                        f"Required lookup {name}.{lookup['column']} targets {target_name}, "
-                        "which has no generated records."
-                    )
+            if lookup.get("existing_ids") or not records_by_table.get(target_name):
                 continue
             column_number = columns.index(lookup["column"]) + 1
-            for index, _record in enumerate(records):
-                target = target_records[index % len(target_records)]
+            for index, record in enumerate(records):
+                target_key = record[lookup["column"]]
                 cell = worksheet.cell(row=index + 2, column=column_number)
-                cell.value = target[INTERNAL_KEY]
-                target_cell = key_cells[target_name][target[INTERNAL_KEY]]
+                target_cell = key_cells[target_name][target_key]
                 target_sheet = sheet_by_table[target_name].replace("'", "''")
                 cell.hyperlink = f"#'{target_sheet}'!{target_cell}"
                 cell.style = "Hyperlink"
