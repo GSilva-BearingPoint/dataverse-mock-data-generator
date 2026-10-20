@@ -3,6 +3,7 @@
 ## Consent-gated dependencies
 
 Run `scripts/check_dependencies.py --json` at startup. It is read-only and reports missing CLIs/modules.
+Its JSON includes the current step, status, explanation, and next action without adding non-JSON output.
 
 If anything is missing, present the list and ask one question with:
 
@@ -40,3 +41,7 @@ The summary must also show:
 - Per-table meaningful-field completeness statistics.
 - Three complete sample rows per table, including lookup keys and email aliases.
 - Discovery warnings and skipped optional relationships.
+
+The first summary line must mark step 7 as `WAITING` and explain that no writes can happen until the user
+approves this exact validated workbook. If the workbook is edited, return to step 6 and explain why
+revalidation is required.

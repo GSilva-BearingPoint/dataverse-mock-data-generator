@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import copy
+import io
+import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import load_workbook
 
@@ -13,10 +17,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from build_testdata_workbook import build_workbook
+import check_dependencies
 from discover_testdata_workbook import discover_plan, inspect_table, parse_table_counts
+from progress import progress_message
 from quality_profile import build_quality_profile
 from summarize_testdata_workbook import summarize
 from testdata_common import generate_records
+import validate_testdata_workbook
 from validate_testdata_workbook import validate
 
 
@@ -560,6 +567,7 @@ class WorkbookTests(unittest.TestCase):
             build_workbook(self._spec(), path)
             output = summarize(path)
 
+            self.assertIn("[Step 7/8 - Approval] WAITING:", output)
             self.assertIn("Table abc_widget: 2 record(s), implicit", output)
             self.assertIn("abc_parent.abc_widgetid required abc_widget", output)
             self.assertIn("path: abc_parent -> abc_widget", output)
@@ -745,6 +753,82 @@ class WorkbookTests(unittest.TestCase):
         self.assertEqual(3, len(keys))
         self.assertEqual("EXT", records[0]["abc_code"])
         self.assertEqual("EXT-2", records[1]["abc_code"])
+
+
+class ProgressVisibilityTests(unittest.TestCase):
+    def test_progress_message_explains_current_and_next_step(self) -> None:
+        message = progress_message(
+            5,
+            "running",
+            "Generating metadata-driven records.",
+            "Validate the workbook.",
+        )
+
+        self.assertEqual(
+            "[Step 5/8 - Record generation] RUNNING: Generating metadata-driven records. "
+            "Next: Validate the workbook.",
+            message,
+        )
+
+    def test_dependency_json_remains_machine_readable_with_progress(self) -> None:
+        ready = {
+            "python": "python",
+            "missing_tools": [],
+            "missing_python_modules": [],
+            "ready": True,
+        }
+        output = io.StringIO()
+        with (
+            patch.object(check_dependencies, "check", return_value=ready),
+            patch.object(sys, "argv", ["check_dependencies.py", "--json"]),
+            redirect_stdout(output),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            check_dependencies.main()
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(0, exit_context.exception.code)
+        self.assertEqual(1, result["progress"]["step"])
+        self.assertEqual("complete", result["progress"]["status"])
+
+    def test_dependency_json_reports_blocked_state(self) -> None:
+        blocked = {
+            "python": "python",
+            "missing_tools": [{"name": "pac", "install": "install"}],
+            "missing_python_modules": [],
+            "ready": False,
+        }
+        output = io.StringIO()
+        with (
+            patch.object(check_dependencies, "check", return_value=blocked),
+            patch.object(sys, "argv", ["check_dependencies.py", "--json"]),
+            redirect_stdout(output),
+            self.assertRaises(SystemExit) as exit_context,
+        ):
+            check_dependencies.main()
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(1, exit_context.exception.code)
+        self.assertEqual("blocked", result["progress"]["status"])
+
+    def test_validation_cli_reports_running_and_complete_states(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "progress.xlsx"
+            build_workbook(WorkbookTests()._spec(), path)
+            output = io.StringIO()
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    ["validate_testdata_workbook.py", "--workbook", str(path)],
+                ),
+                redirect_stdout(output),
+            ):
+                validate_testdata_workbook.main()
+
+            text = output.getvalue()
+            self.assertIn("[Step 6/8 - Workbook validation] RUNNING:", text)
+            self.assertIn("[Step 6/8 - Workbook validation] COMPLETE:", text)
 
 
 if __name__ == "__main__":

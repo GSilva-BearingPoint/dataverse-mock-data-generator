@@ -6,6 +6,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
+from progress import progress_message
 from quality_profile import completeness
 from validate_testdata_workbook import load_metadata, read_rows
 
@@ -30,7 +31,16 @@ def summarize(workbook_path: Path) -> str:
     total = 0
     table_summaries = []
     relationships = []
-    lines = [f"Environment: {run.get('environment')}"]
+    lines = [
+        progress_message(
+            7,
+            "waiting",
+            "The dry-run workbook is ready for review. Writes are paused because explicit approval "
+            "is required for this exact preview.",
+            "Approve, reject, or edit the workbook; edited workbooks must be validated again.",
+        ),
+        f"Environment: {run.get('environment')}",
+    ]
     for table_name in run["order"]:
         table = tables[table_name]
         rows = read_rows(workbook, table)

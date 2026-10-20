@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from build_testdata_workbook import build_workbook
+from progress import emit_progress
 from quality_profile import build_quality_profile
 from realistic_data import classify, select_organic
 from testdata_common import SIZE_COUNTS, default_workbook_path, dependency_order, validate_seed_email
@@ -632,6 +633,16 @@ def main() -> None:
     count = args.count if args.count is not None else SIZE_COUNTS[args.size]
     if count <= 0:
         raise ValueError("Record count must be positive.")
+    table_names = [value.strip() for value in args.tables.split(",") if value.strip()]
+    if not table_names:
+        raise ValueError("At least one table logical name is required.")
+    emit_progress(
+        4,
+        "running",
+        "Reading writable columns, keys, choices, business constraints, and relationships "
+        f"for {', '.join(table_names)}. This determines what can be filled safely.",
+        "Resolve required dependencies and build a per-table generation profile.",
+    )
     os.environ["DATAVERSE_URL"] = args.environment_url.rstrip("/")
     get_client = import_get_client()
     require_delegated_auth()
@@ -644,26 +655,48 @@ def main() -> None:
     )
     if not organizations:
         raise RuntimeError("Authenticated connection is valid but no organization row was returned.")
-    table_names = [value.strip() for value in args.tables.split(",") if value.strip()]
-    if not table_names:
-        raise ValueError("At least one table logical name is required.")
     context = {}
     if args.context_rules:
         with Path(args.context_rules).open(encoding="utf-8") as handle:
             context = json.load(handle)
-    plan = discover_plan(
-        client=client,
-        table_names=table_names,
-        count=count,
-        seed_email=validate_seed_email(args.seed_email),
-        environment=args.environment_url.rstrip("/"),
-        all_writable=args.all_writable_columns,
-        include_required_related=not args.no_required_related,
-        context=context,
-        existing_tables={
-            name.strip() for name in (args.existing_tables or "").split(",") if name.strip()
-        },
-        table_counts=parse_table_counts(args.table_counts),
+    try:
+        plan = discover_plan(
+            client=client,
+            table_names=table_names,
+            count=count,
+            seed_email=validate_seed_email(args.seed_email),
+            environment=args.environment_url.rstrip("/"),
+            all_writable=args.all_writable_columns,
+            include_required_related=not args.no_required_related,
+            context=context,
+            existing_tables={
+                name.strip() for name in (args.existing_tables or "").split(",") if name.strip()
+            },
+            table_counts=parse_table_counts(args.table_counts),
+        )
+    except Exception as error:
+        emit_progress(
+            4,
+            "blocked",
+            f"Schema discovery could not produce a safe generation plan: {error}",
+            "Resolve the reported metadata, relationship, or run-configuration issue and retry.",
+        )
+        raise
+    implicit_tables = [
+        table["logical_name"]
+        for table in plan["tables"]
+        if (table.get("inclusion") or {}).get("kind") == "implicit"
+    ]
+    emit_progress(
+        4,
+        "complete",
+        f"Discovered {len(plan['tables'])} table profile(s). "
+        + (
+            "Automatically included dependencies: " + ", ".join(implicit_tables) + "."
+            if implicit_tables
+            else "No additional dependency tables were required."
+        ),
+        "Generate meaningful records and the editable approval workbook.",
     )
     if args.plan_output:
         plan_path = Path(args.plan_output)
@@ -675,7 +708,28 @@ def main() -> None:
         if args.output
         else default_workbook_path(table_names, count)
     )
-    build_workbook(plan, output_path)
+    emit_progress(
+        5,
+        "running",
+        "Generating values from the discovered metadata and linking related rows in dependency order.",
+        "Write the Excel preview, then validate every row against its quality profile.",
+    )
+    try:
+        build_workbook(plan, output_path)
+    except Exception as error:
+        emit_progress(
+            5,
+            "blocked",
+            f"Record generation or workbook creation failed: {error}",
+            "Correct the reported profile or generation rule and regenerate the preview.",
+        )
+        raise
+    emit_progress(
+        5,
+        "complete",
+        f"Generated the approval workbook at {output_path.resolve()}.",
+        "Run workbook validation and review the generated samples before approval.",
+    )
     print(f"Approval workbook written: {output_path.resolve()}")
 
 

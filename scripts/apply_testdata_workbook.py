@@ -11,6 +11,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+from progress import emit_progress
 from testdata_common import INTERNAL_KEY
 from validate_testdata_workbook import load_metadata, validate
 
@@ -89,10 +90,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    emit_progress(
+        8,
+        "running",
+        "Revalidating the approved workbook and connection before the first Dataverse write.",
+        "Create one retained probe per table, then create the remaining rows in dependency order.",
+    )
     os.environ["DATAVERSE_URL"] = args.environment_url.rstrip("/")
     workbook_path = Path(args.workbook)
     rows_by_table, errors = validate(workbook_path)
     if errors:
+        emit_progress(
+            8,
+            "blocked",
+            f"The approved workbook has {len(errors)} validation error(s); no records were created.",
+            "Correct and revalidate the workbook, then request approval again.",
+        )
         for error in errors:
             print(f"ERROR: {error}")
         raise SystemExit("Workbook validation failed; no records were created.")
@@ -105,16 +118,34 @@ def main() -> None:
     active_environment = (os.environ.get("DATAVERSE_URL") or "").rstrip("/")
     planned_environment = (run.get("environment") or "").rstrip("/")
     if not active_environment or active_environment.casefold() != planned_environment.casefold():
+        emit_progress(
+            8,
+            "blocked",
+            "The active Dataverse environment does not match the approved workbook.",
+            "Reconnect to the workbook environment or generate a new preview for the active environment.",
+        )
         raise RuntimeError(
             "The active Dataverse environment does not match the workbook. "
             f"Workbook={planned_environment!r}, active={active_environment!r}. No records were created."
         )
     if args.environment_url.rstrip("/").casefold() != planned_environment.casefold():
+        emit_progress(
+            8,
+            "blocked",
+            "The explicitly selected environment does not match the approved workbook.",
+            "Select the workbook environment or generate and approve a new workbook.",
+        )
         raise RuntimeError(
             "The selected environment does not match the workbook environment. "
             "No records were created."
         )
     if args.seed_email.strip().casefold() != str(run.get("seed_email") or "").casefold():
+        emit_progress(
+            8,
+            "blocked",
+            "The supplied seed email does not match the approved workbook.",
+            "Use the workbook seed email or generate and approve a new preview.",
+        )
         raise RuntimeError(
             "The supplied seed email does not match the approved workbook. "
             "No records were created."
@@ -147,7 +178,13 @@ def main() -> None:
         if table_name in resumed:
             id_by_key[table_name] = {item["row_key"]: item["id"] for item in resumed[table_name]}
             manifest["records"][table_name] = resumed[table_name]
-            print(f"{table_name}: reusing {len(resumed[table_name])} records from resume manifest")
+            emit_progress(
+                8,
+                "running",
+                f"{table_name}: reusing {len(resumed[table_name])} previously created record(s) "
+                "from the resume manifest.",
+                "Continue with the next dependency-ordered table.",
+            )
             continue
         table = tables[table_name]
         payloads: list[dict[str, Any]] = []
@@ -182,6 +219,24 @@ def main() -> None:
 
         created_ids: list[str] = []
         manifest["records"][table_name] = []
+        dependencies = [
+            lookup["target_table"]
+            for lookup in table.get("lookups", [])
+            if not lookup.get("existing_ids")
+        ]
+        emit_progress(
+            8,
+            "running",
+            f"{table_name}: preparing {len(payloads)} record(s). "
+            + (
+                "Generated parent records are already available from: "
+                + ", ".join(sorted(set(dependencies)))
+                + "."
+                if dependencies
+                else "This table has no generated-parent dependency."
+            ),
+            "Create the first approved row as a retained probe before sending the remaining chunks.",
+        )
 
         # The first approved row is a retained probe. If a plugin-enforced rule rejects it,
         # the remaining rows for this table are not attempted.
@@ -192,7 +247,16 @@ def main() -> None:
 
         offset = 0
         for payload_chunk in payload_chunks:
-            result = client.records.create(table_name, payload_chunk)
+            try:
+                result = client.records.create(table_name, payload_chunk)
+            except Exception as error:
+                emit_progress(
+                    8,
+                    "blocked",
+                    f"{table_name}: Dataverse rejected the current probe or chunk: {error}",
+                    "Review the business-rule error; regenerate and reapprove if values must change.",
+                )
+                raise
             if isinstance(result, str):
                 result = [result]
             result_ids = [str(value) for value in result]
@@ -209,9 +273,11 @@ def main() -> None:
             )
             offset += len(payload_chunk)
             write_manifest(manifest, manifest_path)
-            print(
-                f"{table_name}: created {len(created_ids)}/{len(payloads)}",
-                flush=True,
+            emit_progress(
+                8,
+                "running",
+                f"{table_name}: created {len(created_ids)}/{len(payloads)} record(s).",
+                "Continue the current table or advance to the next dependent table.",
             )
         if len(created_ids) != len(keys):
             raise RuntimeError(
@@ -219,6 +285,12 @@ def main() -> None:
             )
         id_by_key[table_name] = dict(zip(keys, created_ids))
 
+    emit_progress(
+        8,
+        "complete",
+        "All approved records were created and recorded in the rollback manifest.",
+        f"Use {manifest_path.resolve()} if this run must be reviewed or rolled back.",
+    )
     print(f"Manifest written: {manifest_path.resolve()}")
 
 

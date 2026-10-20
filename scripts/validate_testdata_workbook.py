@@ -8,6 +8,7 @@ from typing import Any
 
 from openpyxl import load_workbook
 
+from progress import emit_progress
 from quality_profile import evaluate_record
 from testdata_common import INTERNAL_KEY
 
@@ -182,13 +183,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Validate an edited test-data workbook offline.")
     parser.add_argument("--workbook", required=True)
     args = parser.parse_args()
+    emit_progress(
+        6,
+        "running",
+        "Checking required fields, meaningful-data profiles, types, choices, keys, and lookups "
+        "without writing to Dataverse.",
+        "Show the approval summary if validation succeeds.",
+    )
     rows_by_table, errors = validate(Path(args.workbook))
     if errors:
+        emit_progress(
+            6,
+            "blocked",
+            f"Found {len(errors)} workbook validation error(s); approval and writes remain blocked.",
+            "Correct the listed workbook values and validate it again.",
+        )
         print("Workbook is invalid:")
         for error in errors:
             print(f"- {error}")
         raise SystemExit(1)
     counts = ", ".join(f"{name}={len(rows)}" for name, rows in rows_by_table.items())
+    emit_progress(
+        6,
+        "complete",
+        f"The workbook is valid ({counts}). No Dataverse records have been written.",
+        "Review the summary and explicitly approve or adjust the preview.",
+    )
     print(f"Workbook is valid: {counts}")
 
 

@@ -135,6 +135,34 @@ get explicit user consent before installing.
 
 ---
 
+## 4a. Installation (for team members)
+
+The skill calls its helper scripts by relative path, so install the **whole repository**, not just `SKILL.md`.
+
+**Personal skill (available in all projects)**
+```powershell
+git clone https://github.com/GSilva-BearingPoint/dataverse-mock-data-generator "$HOME\.copilot\skills\dv-mock-data-generator"
+```
+
+**Project skill (shared with everyone using one repo)**
+Clone it into `<project>\.github\skills\dv-mock-data-generator` (or add it as a git submodule).
+
+Then restart Copilot CLI (or run `/skills reload`) and confirm it appears in `/skills list`.
+
+**Prerequisites**
+1. Access to this GitHub repository.
+2. Microsoft's Dataverse skills: `npx skills add microsoft/Dataverse-skills -s "*" -g`
+   (or `/plugin install dataverse@awesome-copilot`).
+3. Python dependencies: `python -m pip install -r scripts\requirements.txt`
+4. `pac` and `dataverse` CLIs, plus a Microsoft Entra account with delegated access to a Dataverse environment.
+
+**Updating:** run `git pull` inside the skill folder.
+
+**Using it:** ask the agent in plain language, or use the shorthand
+`testdata: small account,contact seed=you@company.com`.
+
+---
+
 ## 5. Repository layout
 
 ```
@@ -208,6 +236,12 @@ examples/
      |
 11  prints manifest path + per-table counts + environment URL
 ```
+
+Every phase is user-visible with a stable message such as
+`[Step 5/8 - Record generation] RUNNING: ... Next: ...`. Updates explain what is happening, why the phase is
+needed, and what comes next. The agent reports conversational connection/setup phases; helper scripts report
+prerequisite, discovery, generation, validation, approval, and apply phases. Progress is updated on phase
+changes, blockers, approval waits, and each table during writes rather than for every internal command.
 
 ### Shorthand trigger
 Instead of full prose, a user can type:

@@ -74,6 +74,30 @@ for this workflow: all reads and writes must execute as the signed-in user.
 
 Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the count.
 
+## User-visible progress
+
+Keep the user informed whenever the workflow changes phase, becomes blocked, or waits for a decision. Use
+the same eight-step model as the helper scripts:
+
+| Step | Phase | Explain to the user |
+|---|---|---|
+| 1 | Prerequisites | Which dependencies are being checked and why generation cannot start without them |
+| 2 | Connection | Which delegated user/environment is being verified and why the target must be explicit |
+| 3 | Run setup | Which tables/counts, seed email, repository context, existing-record choices, and output path are being prepared |
+| 4 | Schema discovery | That live writable metadata, constraints, keys, and relationships are being inspected |
+| 5 | Record generation | That meaningful values and dependency links are being generated in memory only |
+| 6 | Workbook validation | That quality, types, choices, keys, and lookups are being checked offline |
+| 7 | Approval | That writes are paused while the exact dry-run workbook is reviewed |
+| 8 | Dataverse apply | Which table is currently being probed/created and why dependency order matters |
+
+Each phase update must state **current step**, **status** (`running`, `complete`, `waiting`, or `blocked`),
+**what is happening and why**, and **what happens next**. Use the helper-script format:
+`[Step N/8 - Phase] STATUS: explanation Next: next action`.
+
+Do not emit repetitive updates for every internal command. Update only on phase changes, meaningful
+sub-steps such as beginning a new table during apply, blockers, and user decision points. The agent must
+provide steps 2 and 3 because those are conversational; the local scripts provide steps 1 and 4-8.
+
 ## Agentic flow
 
 1. **Check dependencies without changing the machine.** Run `scripts/check_dependencies.py --json`.
@@ -86,6 +110,8 @@ Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the
 2. **Check the current connection before changing it.** Load dv-overview, then use dv-connect to run
    `dataverse auth who` and `pac org who`. If both resolve to the same user/environment, show the account,
    environment name, and URL and ask: **Use this connection** or **Change user/environment**.
+   - Announce step 2 as running before verification, waiting when user selection is required, blocked when
+     authentication fails, and complete after the exact delegated account/environment is confirmed.
    - Reuse only after explicit confirmation.
    - If change is requested (or no valid current connection exists), follow dv-connect's delegated
      authentication and environment discovery. Return the environment list and wait for selection. Never
@@ -111,6 +137,9 @@ Small/medium/large remain fixed at **25/250/2500**; a bare integer overrides the
    accepts the Desktop default.
 6. **Parse the data request** (shorthand or prose) into table list and per-table count. Environment and seed
    email always come from the verified dv-connect selection, never from defaults or unverified prompt text.
+   - Treat repository context, workbook destination, seed email, table counts, and existing-record choices
+     as step 3. Keep step 3 waiting while any mandatory answer is outstanding, then mark it complete with a
+     concise run configuration summary.
 7. **Discover schema & relationships live from the selected Power Apps environment** with
    `scripts/discover_testdata_workbook.py` — see
    [`references/schema-and-dependency-discovery.md`](references/schema-and-dependency-discovery.md):
