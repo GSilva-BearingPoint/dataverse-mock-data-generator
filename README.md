@@ -127,7 +127,7 @@ msal-extensions                        # secure token cache persistence for msal
 ```
 Install with:
 ```powershell
-python -m pip install -r scripts/requirements.txt
+python -m pip install -r skills/dv-mock-data-generator/scripts/requirements.txt
 ```
 `scripts/check_dependencies.py --json` performs a **read-only** audit of these Python modules plus the
 `pac`, `dataverse`, and `npm` CLIs, and reports what's missing without installing anything — the agent must
@@ -139,13 +139,22 @@ get explicit user consent before installing.
 
 The skill calls its helper scripts by relative path, so install the **whole repository**, not just `SKILL.md`.
 
+The skill lives in `skills/dv-mock-data-generator/` (with `SKILL.md`, `scripts/`, `references/`), and the repo
+root has a plugin manifest, so it can be installed as a plugin:
+
+**Plugin (recommended)**
+```
+/plugin install GSilva-BearingPoint/dataverse-mock-data-generator
+```
+
 **Personal skill (available in all projects)**
 ```powershell
-git clone https://github.com/GSilva-BearingPoint/dataverse-mock-data-generator "$HOME\.copilot\skills\dv-mock-data-generator"
+git clone https://github.com/GSilva-BearingPoint/dataverse-mock-data-generator "$HOME\.copilot\dv-mock-data-generator-repo"
+Copy-Item "$HOME\.copilot\dv-mock-data-generator-repo\skills\dv-mock-data-generator" "$HOME\.copilot\skills\" -Recurse
 ```
 
 **Project skill (shared with everyone using one repo)**
-Clone it into `<project>\.github\skills\dv-mock-data-generator` (or add it as a git submodule).
+Copy `skills\dv-mock-data-generator` into `<project>\.github\skills\`.
 
 Then restart Copilot CLI (or run `/skills reload`) and confirm it appears in `/skills list`.
 
@@ -153,7 +162,7 @@ Then restart Copilot CLI (or run `/skills reload`) and confirm it appears in `/s
 1. Access to this GitHub repository.
 2. Microsoft's Dataverse skills: `npx skills add microsoft/Dataverse-skills -s "*" -g`
    (or `/plugin install dataverse@awesome-copilot`).
-3. Python dependencies: `python -m pip install -r scripts\requirements.txt`
+3. Python dependencies: `python -m pip install -r skills\dv-mock-data-generator\scripts\requirements.txt`
 4. `pac` and `dataverse` CLIs, plus a Microsoft Entra account with delegated access to a Dataverse environment.
 
 **Updating:** run `git pull` inside the skill folder.
