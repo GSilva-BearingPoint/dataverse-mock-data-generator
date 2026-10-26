@@ -97,7 +97,7 @@ The local Python scripts in this repo only do what the Microsoft skills don't:
 - **Meaningful-data contract per table.** Writable required fields and primary names are combined with a
   representative metadata-derived profile. The same contract is stored in the workbook and rejects edited
   rows that become technically valid but too sparse to be useful.
-- **Defensive discovery of undocumented business rules.** Plugins/business rules can reject writes for
+- **Defensive discovery of undocumented business rules.** plugins/business rules can reject writes for
   reasons invisible in metadata. After approval, a single probe record is created per table first; a 400/409
   error is parsed to patch the generator and the full batch is created only after that succeeds.
 - **Manifest-based rollback.** Every successful create is appended to a JSON manifest (table → GUIDs) so the

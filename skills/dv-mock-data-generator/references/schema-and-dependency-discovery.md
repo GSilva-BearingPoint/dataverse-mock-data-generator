@@ -116,7 +116,7 @@ dv-data's `references/multi-table-fk-import.md`).
 
 ## 5. Business rules not visible in metadata
 
-Plugins and classic business rules can enforce constraints metadata won't show (e.g., "email domain must
+plugins and classic business rules can enforce constraints metadata won't show (e.g., "email domain must
 match account", "end date must be after start date", cross-field conditional requirements). Discover these
 defensively, not exhaustively:
 
